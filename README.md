@@ -1,5 +1,7 @@
 # Codex MiMo Sidecar
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 Run MiMo-backed Codex sidecars for bounded worker tasks while your main GPT session stays responsible for planning, review, and final judgment.
 
 This project installs as a Codex skill. It gives Codex a small launcher, a local Responses-compatible proxy, and session bookkeeping so the main agent can delegate repetitive or token-heavy work to MiMo.
