@@ -37,6 +37,18 @@ def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def audit_event(server: Any, event: dict[str, Any]) -> None:
+    audit_log = getattr(server, "audit_log", "")
+    if not audit_log:
+        return
+    record = {"timestamp": now(), **event}
+    try:
+        with open(audit_log, "a", encoding="utf-8") as handle:
+            handle.write(json_dumps(record) + "\n")
+    except OSError as exc:
+        print(f"warning: could not write audit log: {exc}", file=sys.stderr)
+
+
 def content_to_text(content: Any) -> str:
     if content is None:
         return ""
@@ -235,6 +247,8 @@ def responses_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         "messages": response_input_to_messages(payload),
         "stream": bool(payload.get("stream", False)),
     }
+    if chat["stream"]:
+        chat["stream_options"] = {"include_usage": True}
     passthrough = (
         "temperature",
         "top_p",
@@ -421,10 +435,47 @@ class ProxyHandler(BaseHTTPRequestHandler):
             upstream = self.upstream_request(chat_payload, stream=False)
             data = upstream.read()
             chat_response = json.loads(data.decode("utf-8"))
+            audit_event(
+                self.server,
+                {
+                    "event": "upstream_response",
+                    "stream": False,
+                    "status": upstream.status,
+                    "upstream": getattr(self.server, "upstream", DEFAULT_UPSTREAM),
+                    "upstream_request_id": chat_response.get("id")
+                    or upstream.headers.get("x-request-id"),
+                    "requested_model": chat_payload["model"],
+                    "upstream_model": chat_response.get("model"),
+                    "finish_reason": ((chat_response.get("choices") or [{}])[0]).get(
+                        "finish_reason"
+                    ),
+                    "usage": usage_to_responses(chat_response.get("usage")),
+                },
+            )
             self.send_json(200, chat_to_response(chat_response, chat_payload["model"]))
         except urllib.error.HTTPError as exc:
+            audit_event(
+                self.server,
+                {
+                    "event": "upstream_error",
+                    "stream": False,
+                    "status": exc.code,
+                    "upstream": getattr(self.server, "upstream", DEFAULT_UPSTREAM),
+                    "requested_model": chat_payload["model"],
+                },
+            )
             self.forward_upstream_error(exc)
         except Exception as exc:
+            audit_event(
+                self.server,
+                {
+                    "event": "proxy_error",
+                    "stream": False,
+                    "upstream": getattr(self.server, "upstream", DEFAULT_UPSTREAM),
+                    "requested_model": chat_payload["model"],
+                    "error_type": type(exc).__name__,
+                },
+            )
             self.send_error_json(502, str(exc))
 
     def forward_chat(self, payload: dict[str, Any]) -> None:
@@ -481,6 +532,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         text = ""
         tool_indexes: dict[int, int] = {}
         tool_calls: dict[int, dict[str, str]] = {}
+        upstream_request_id = upstream.headers.get("x-request-id")
+        upstream_model = None
+        finish_reason = None
+        usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         self.sse(
             "response.created",
@@ -508,7 +563,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 chunk = json.loads(data_text)
             except json.JSONDecodeError:
                 continue
+            upstream_request_id = chunk.get("id") or upstream_request_id
+            upstream_model = chunk.get("model") or upstream_model
+            if chunk.get("usage"):
+                usage = usage_to_responses(chunk["usage"])
             choice = (chunk.get("choices") or [{}])[0]
+            finish_reason = choice.get("finish_reason") or finish_reason
             delta = choice.get("delta") or {}
             content = delta.get("content")
             if content:
@@ -643,10 +703,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     "object": "response",
                     "created_at": now(),
                     "status": "completed",
-                    "model": model,
+                    "model": upstream_model or model,
                     "output": [],
-                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    "usage": usage,
                 },
+            },
+        )
+        audit_event(
+            self.server,
+            {
+                "event": "upstream_response",
+                "stream": True,
+                "status": upstream.status,
+                "upstream": getattr(self.server, "upstream", DEFAULT_UPSTREAM),
+                "upstream_request_id": upstream_request_id,
+                "requested_model": model,
+                "upstream_model": upstream_model,
+                "finish_reason": finish_reason,
+                "usage": usage,
             },
         )
 
@@ -705,6 +779,8 @@ def self_test() -> int:
     assert chat["tools"][0]["function"]["strict"] is True
     assert chat["parallel_tool_calls"] is True
     assert chat["max_tokens"] == 100
+    streaming_chat = responses_to_chat({"model": "mimo-v2.5-pro", "stream": True})
+    assert streaming_chat["stream_options"] == {"include_usage": True}
     assert "tools" not in responses_to_chat({"tools": [{"type": "web_search_preview"}]})
     try:
         responses_to_chat(
@@ -738,6 +814,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api-key-env", default="MIMO_API_KEY")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--max-body-mb", type=int, default=128)
+    parser.add_argument("--audit-log", default=os.environ.get("MIMO_AUDIT_LOG", ""))
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--status", action="store_true", help="Check whether the local proxy is already running.")
     parser.add_argument("--self-test", action="store_true")
@@ -773,9 +850,12 @@ def main(argv: list[str]) -> int:
     server.api_key_env = args.api_key_env
     server.timeout = args.timeout
     server.max_body_bytes = args.max_body_mb * 1024 * 1024
+    server.audit_log = args.audit_log
     server.quiet = args.quiet
     print(f"mimo-responses-proxy listening on http://{args.host}:{args.port}/v1", flush=True)
     print(f"upstream: {args.upstream}/chat/completions", flush=True)
+    if args.audit_log:
+        print(f"audit log: {args.audit_log}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
