@@ -341,12 +341,62 @@ def chat_to_response(payload: dict[str, Any], model: str) -> dict[str, Any]:
 
 
 def build_models_response() -> dict[str, Any]:
+    codex_models = [
+        {
+            "slug": model,
+            "display_name": "MiMo v2.5 Pro" if model == "mimo-v2.5-pro" else model,
+            "description": "MiMo model served through the local Codex sidecar proxy.",
+            "default_reasoning_level": "high",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "Lighter reasoning"},
+                {"effort": "medium", "description": "Balanced reasoning"},
+                {"effort": "high", "description": "Deeper reasoning"},
+            ],
+            "shell_type": "default",
+            "visibility": "list",
+            "supported_in_api": True,
+            "priority": 50,
+            "additional_speed_tiers": [],
+            "service_tiers": [],
+            "default_service_tier": None,
+            "availability_nux": None,
+            "upgrade": None,
+            "base_instructions": (
+                "You are Codex, a coding agent. Work carefully, use available tools "
+                "when needed, and report concise evidence for your conclusions."
+            ),
+            "model_messages": None,
+            "supports_reasoning_summaries": False,
+            "default_reasoning_summary": "none",
+            "support_verbosity": False,
+            "default_verbosity": None,
+            "apply_patch_tool_type": None,
+            "web_search_tool_type": "text",
+            "truncation_policy": {"mode": "bytes", "limit": 10000},
+            "supports_parallel_tool_calls": False,
+            "supports_image_detail_original": False,
+            "context_window": 272000,
+            "max_context_window": 272000,
+            "auto_compact_token_limit": None,
+            "comp_hash": None,
+            "effective_context_window_percent": 95,
+            "experimental_supported_tools": [],
+            "input_modalities": ["text"],
+            "supports_search_tool": False,
+            "use_responses_lite": False,
+            "auto_review_model_override": None,
+            "tool_mode": None,
+            "multi_agent_version": None,
+        }
+        for model in MODELS
+    ]
     return {
         "object": "list",
         "data": [
             {"id": model, "object": "model", "created": 0, "owned_by": "mimo"}
             for model in MODELS
         ],
+        "models": codex_models,
     }
 
 
@@ -781,6 +831,10 @@ def self_test() -> int:
     assert chat["max_tokens"] == 100
     streaming_chat = responses_to_chat({"model": "mimo-v2.5-pro", "stream": True})
     assert streaming_chat["stream_options"] == {"include_usage": True}
+    models_response = build_models_response()
+    assert models_response["data"][0]["id"] == "mimo-v2.5-pro"
+    assert models_response["models"][0]["slug"] == "mimo-v2.5-pro"
+    assert models_response["models"][0]["supported_in_api"] is True
     assert "tools" not in responses_to_chat({"tools": [{"type": "web_search_preview"}]})
     try:
         responses_to_chat(
