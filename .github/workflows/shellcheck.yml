@@ -15,7 +15,7 @@ jobs:
           bash -n scripts/codex-mimo-subagent
           bash -n scripts/terminal-chat
           python3 -m py_compile scripts/mimo-responses-proxy
-          scripts/mimo-responses-proxy --self-test
+          python3 scripts/mimo-responses-proxy --self-test
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:

@@ -124,6 +124,15 @@ Resume a specific session by ID from any directory:
 | `--verbose-stderr` | Show normally-filtered Codex startup warnings. |
 | `-` | Read prompt from stdin. |
 
+To verify that a task actually reached MiMo, start the proxy with an audit log:
+
+```bash
+MIMO_AUDIT_LOG=/tmp/mimo-audit.jsonl \
+  "<path-to-skill>/scripts/mimo-responses-proxy"
+```
+
+Each upstream request records only the endpoint, request ID, requested and returned model names, finish reason, and token usage. It never records the API key, prompt, or response content. Treat a matching timestamp, `upstream_model: "mimo-v2.5-pro"`, HTTP status `200`, a non-empty `upstream_request_id`, and non-zero token usage as the verification receipt.
+
 The wrapper isolates environment variables. Pass only what the task needs:
 
 ```bash

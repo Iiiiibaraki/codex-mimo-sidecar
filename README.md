@@ -117,6 +117,15 @@ curl http://127.0.0.1:12360/health
 curl http://127.0.0.1:12360/v1/models
 ```
 
+To produce an auditable verification receipt:
+
+```bash
+MIMO_AUDIT_LOG=/tmp/mimo-audit.jsonl \
+  MIMO_API_KEY=... scripts/mimo-responses-proxy
+```
+
+The JSONL audit log records the upstream endpoint, request ID, requested and returned model names, finish reason, and token usage. It never records the API key, prompt, or response content.
+
 ## Call MiMo Directly Through Codex
 
 Smoke test the Codex profile:
@@ -187,7 +196,7 @@ bash -n scripts/codex-mimo-sidecar
 bash -n scripts/codex-mimo-subagent
 bash -n scripts/terminal-chat
 python -m py_compile scripts/mimo-responses-proxy
-scripts/mimo-responses-proxy --self-test
+python scripts/mimo-responses-proxy --self-test
 ```
 
 Optional:
@@ -220,7 +229,7 @@ Confirm the request reaches the local proxy. The proxy access log should show:
 POST /v1/responses
 ```
 
-The proxy response also includes a `usage` object when the upstream returns token accounting.
+The proxy response includes the upstream `usage` object for both streaming and non-streaming requests. For strict verification, inspect the audit log and require HTTP status `200`, a non-empty `upstream_request_id`, `upstream_model: "mimo-v2.5-pro"`, and non-zero token usage.
 
 ### Windows path issues
 
